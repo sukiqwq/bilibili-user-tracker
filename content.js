@@ -32,12 +32,23 @@ class BilibiliUserTracker {
     getUserInfo() {
         // 获取页面上的用户信息
         const usernameEl = document.querySelector('.nickname');
-        const fansEl = document.querySelector('.nav-statistics__item-num');
+        
+        // 正确获取粉丝数 - 查找包含"粉丝数"文本的元素
+        let fansEl = null;
+        const statsItems = document.querySelectorAll('.nav-statistics__item');
+        
+        for (const item of statsItems) {
+            const textEl = item.querySelector('.nav-statistics__item-text');
+            if (textEl && textEl.textContent.includes('粉丝数')) {
+                fansEl = item.querySelector('.nav-statistics__item-num');
+                break;
+            }
+        }
 
         return {
             username: usernameEl ? usernameEl.textContent.trim() : '未知用户',
             fans: fansEl ? fansEl.textContent.trim() : '0',
-            fanTitle: fansEl ? fansEl.getAttribute('title') : '', // 完整粉丝数（如2,163,722）
+            fanTitle: fansEl ? fansEl.getAttribute('title') : '', // 完整粉丝数
             recordTime: new Date().toLocaleString()
         };
     }
@@ -84,6 +95,10 @@ class BilibiliUserTracker {
             <div class="menu-item" data-action="record">
                 <i class="vui_icon sic-BDC-bookmark_line" style="font-size: 14px; margin-right: 6px;"></i>
                 记录用户
+            </div>
+            <div class="menu-item" data-action="nickname">
+                <i class="vui_icon sic-BDC-edit_line" style="font-size: 14px; margin-right: 6px;"></i>
+                设置昵称
             </div>
             <div class="menu-item" data-action="debug">
                 <i class="vui_icon sic-BDC-code_line" style="font-size: 14px; margin-right: 6px;"></i>
@@ -145,6 +160,9 @@ class BilibiliUserTracker {
                 switch (action) {
                     case 'record':
                         this.handleUserRecord(uid);
+                        break;
+                    case 'nickname':
+                        this.handleNicknameSet(uid);
                         break;
                     case 'debug':
                         this.showDebugInfo();
@@ -212,6 +230,7 @@ class BilibiliUserTracker {
         const userData = {
             uid: uid,
             usernames: [userInfo.username],
+            nickname: '', // 固化昵称，初始为空
             firstSeen: userInfo.recordTime,
             lastSeen: userInfo.recordTime,
             fans: userInfo.fans,
@@ -237,15 +256,24 @@ class BilibiliUserTracker {
         existingUser.fans = currentInfo.fans;
         existingUser.fanTitle = currentInfo.fanTitle;
 
+        // 保持原有的固化昵称不变
+        if (!existingUser.hasOwnProperty('nickname')) {
+            existingUser.nickname = '';
+        }
+
         return new Promise((resolve) => {
             chrome.storage.local.set({[`user_${uid}`]: existingUser}, resolve);
         });
     }
 
     showUserHistory(existingUser, currentInfo) {
+        const displayName = existingUser.nickname || existingUser.usernames[existingUser.usernames.length - 1];
+        const nicknameInfo = existingUser.nickname ? `固化昵称: ${existingUser.nickname}` : '无固化昵称';
+        
         const historyText = `
 🔍 找到记录的用户！
 
+${nicknameInfo}
 UID: ${existingUser.uid}
 历史用户名: ${existingUser.usernames.join(' → ')}
 当前用户名: ${currentInfo.username}
@@ -255,7 +283,7 @@ UID: ${existingUser.uid}
 ${existingUser.notes ? `备注: ${existingUser.notes}` : ''}
         `.trim();
 
-        this.showModal(historyText, '用户历史记录');
+        this.showModal(historyText, `用户历史记录 - ${displayName}`);
     }
 
     showSaveSuccess(userInfo) {
@@ -308,10 +336,135 @@ ${existingUser.notes ? `备注: ${existingUser.notes}` : ''}
         };
 
         // 3秒后自动关闭（除非是历史记录或调试信息）
-        if (!title.includes('历史记录') && !title.includes('调试信息')) {
+        if (!title.includes('历史记录') && !title.includes('调试信息') && !title.includes('设置昵称')) {
             setTimeout(() => {
                 if (modal.parentNode) modal.remove();
             }, 3000);
+        }
+    }
+
+    async handleNicknameSet(uid) {
+        try {
+            const userInfo = this.getUserInfo();
+            const existingUser = await this.getUserFromDB(uid);
+
+            if (!existingUser) {
+                // 如果用户不存在，先保存用户信息
+                await this.saveUser(uid, userInfo);
+                this.showNicknameInput(uid, userInfo.username, '');
+            } else {
+                // 用户已存在，显示设置昵称界面
+                const currentNickname = existingUser.nickname || '';
+                const displayName = existingUser.usernames[existingUser.usernames.length - 1];
+                this.showNicknameInput(uid, displayName, currentNickname);
+            }
+        } catch (error) {
+            console.error('处理昵称设置时出错:', error);
+            this.showError('操作失败，请重试');
+        }
+    }
+
+    showNicknameInput(uid, username, currentNickname) {
+        // 移除现有modal
+        const existingModal = document.getElementById('user-tracker-modal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // 创建昵称设置modal
+        const modal = document.createElement('div');
+        modal.id = 'user-tracker-modal';
+        modal.className = 'user-tracker-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>💭 设置固化昵称</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="nickname-form">
+                        <p><strong>用户：</strong>${username}</p>
+                        <p><strong>UID：</strong>${uid}</p>
+                        <br>
+                        <label for="nickname-input">固化昵称：</label>
+                        <input type="text" id="nickname-input" value="${currentNickname}" 
+                               placeholder="输入专属昵称，留空则不设置" maxlength="20">
+                        <br>
+                        <p class="help-text">💡 固化昵称不会随用户改名而变化，方便识别老观众</p>
+                        <div class="button-group">
+                            <button class="save-btn" id="save-nickname">保存</button>
+                            <button class="cancel-btn" id="cancel-nickname">取消</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 添加到页面
+        document.body.appendChild(modal);
+
+        // 获取输入框并聚焦
+        const input = modal.querySelector('#nickname-input');
+        input.focus();
+        input.select();
+
+        // 绑定事件
+        const closeBtn = modal.querySelector('.close');
+        const saveBtn = modal.querySelector('#save-nickname');
+        const cancelBtn = modal.querySelector('#cancel-nickname');
+
+        const closeModal = () => modal.remove();
+
+        closeBtn.onclick = closeModal;
+        cancelBtn.onclick = closeModal;
+        modal.onclick = (e) => {
+            if (e.target === modal) closeModal();
+        };
+
+        // 保存昵称
+        saveBtn.onclick = async () => {
+            const nickname = input.value.trim();
+            await this.saveNickname(uid, nickname);
+            closeModal();
+        };
+
+        // 回车保存
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                saveBtn.click();
+            } else if (e.key === 'Escape') {
+                closeModal();
+            }
+        };
+    }
+
+    async saveNickname(uid, nickname) {
+        try {
+            const existingUser = await this.getUserFromDB(uid);
+            if (!existingUser) {
+                this.showError('用户数据不存在');
+                return;
+            }
+
+            existingUser.nickname = nickname;
+            
+            await new Promise((resolve) => {
+                chrome.storage.local.set({[`user_${uid}`]: existingUser}, resolve);
+            });
+
+            const displayName = nickname || existingUser.usernames[existingUser.usernames.length - 1];
+            
+            if (nickname) {
+                this.showModal(`✅ 昵称设置成功！\n\n固化昵称: ${nickname}\n\n现在无论用户如何改名，都会显示这个昵称。`, '设置成功');
+            } else {
+                this.showModal(`✅ 昵称已清除！\n\n已移除固化昵称，将显示用户的真实用户名。`, '设置成功');
+            }
+
+            console.log(`昵称已更新: UID ${uid} -> "${nickname}"`);
+            
+        } catch (error) {
+            console.error('保存昵称失败:', error);
+            this.showError('保存昵称失败，请重试');
         }
     }
 
@@ -331,7 +484,12 @@ ${existingUser.notes ? `备注: ${existingUser.notes}` : ''}
                 userKeys.forEach(key => {
                     const user = allData[key];
                     const currentName = user.usernames[user.usernames.length - 1];
-                    debugText += `• ${currentName} (${user.uid})\n`;
+                    const displayName = user.nickname || currentName;
+                    
+                    debugText += `• ${displayName} (${user.uid})\n`;
+                    if (user.nickname) {
+                        debugText += `  固化昵称: ${user.nickname}\n`;
+                    }
                     debugText += `  历史名: ${user.usernames.join(' → ')}\n`;
                     debugText += `  粉丝: ${user.fans}\n`;
                     debugText += `  最后出现: ${user.lastSeen}\n\n`;
