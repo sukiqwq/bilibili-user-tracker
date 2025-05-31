@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "B站用户记录器",
+  "version": "1.0",
+  "description": "记录和识别B站用户信息",
+  
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  
+  "content_scripts": [
+    {
+      "matches": ["https://space.bilibili.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ],
+  
+  "web_accessible_resources": [
+    {
+      "resources": ["popup.html"],
+      "matches": ["https://space.bilibili.com/*"]
+    }
+  ]
+}
